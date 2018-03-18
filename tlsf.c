@@ -1,16 +1,15 @@
-#include "tlsf.h"
-
 #include <stdio.h>
 #include <math.h>
 #include <stddef.h>
 #include <limits.h>
 #include <assert.h>
 
-//#define two_power(x) (1<<x) /* Equivalent to 2^x */
-#define MAX_BIT_INDEX ((size_t)(log(UINT_MAX)/log(2)))
+#include "tlsf.h"
+
 typedef char* byte_ptr;
 typedef uint64_t bitmap_t;
 
+#define MAX_BIT_INDEX ((size_t)(log(UINT_MAX)/log(2)))
 #define FLI_INDEX_SIZE  (FLI - MBS_LOG2)
 /****************************************************************************************/
 
@@ -170,7 +169,7 @@ static inline Block_Header* getNextPhysicalBlock(Block_Header* block)
 
 // /****************************************************************************************/
 
-static inline bool isAligned(size_t size)
+static bool isAligned(size_t size)
 {
 	return ((ALIGNMENT-1)&size) == 0 ? true:false;
 }
@@ -185,7 +184,7 @@ static size_t alignSize(size_t size)
 		return (size& ~(ALIGNMENT - 1));
 	}
 }
-static inline bool ptrIsAligned(void *ptr)
+static bool ptrIsAligned(void *ptr)
 {
 	return (ptrdiff_t)ptr % ALIGNMENT == 0;
 }

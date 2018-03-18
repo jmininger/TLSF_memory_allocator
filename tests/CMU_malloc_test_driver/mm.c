@@ -14,11 +14,12 @@
 #include <assert.h>
 #include <unistd.h>
 #include <string.h>
+#include <stddef.h>
 
 #include "mm.h"
 #include "memlib.h"
 #include "config.h"
-#include "../tlsf.h"
+#include "tlsf.h"
 
 /*********************************************************
  * NOTE TO STUDENTS: Before you do anything else, please
@@ -53,6 +54,10 @@ int mm_init(void)
 {
     //Call mem_sbrk on MAX_HEAP then call tlsf on this 
     void* p_heap = mem_sbrk(MAX_HEAP);
+    if((ptrdiff_t)p_heap % ALIGNMENT_NUM != 0)
+    {
+        p_heap = (void*)((ptrdiff_t)p_heap & ~(8 - 1));
+    }
     tlsf_init_struct(p_heap, MAX_HEAP);
     return 0;
 }
@@ -72,7 +77,12 @@ void *mm_malloc(size_t size)
  //        return (void *)((char *)p + SIZE_T_SIZE);
  //    }
 //  return malloc(size);
-    TLSF_t *tlsf = (TLSF_t*)mem_heap_lo();
+    void* heap_low = mem_heap_lo();
+    if((ptrdiff_t)heap_low % ALIGNMENT_NUM != 0)
+    {
+        heap_low = (void*)((ptrdiff_t)heap_low & ~(8 - 1));
+    }
+    TLSF_t* tlsf = (TLSF_t*)heap_low;
     return tlsf_malloc(size, tlsf);
 }
 
@@ -81,7 +91,12 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
-    TLSF_t *tlsf = (TLSF_t*)mem_heap_lo();
+    void* heap_low = mem_heap_lo();
+    if((ptrdiff_t)heap_low % ALIGNMENT_NUM != 0)
+    {
+        heap_low = (void*)((ptrdiff_t)heap_low & ~(8 - 1));
+    }
+    TLSF_t *tlsf = (TLSF_t*)heap_low;
     tlsf_free(ptr, tlsf);
 }
 

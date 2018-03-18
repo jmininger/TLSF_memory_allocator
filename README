@@ -1,0 +1,44 @@
+Two Level Segregated Fit(TLSF) Dynamic Memory Allocator For Real-Time Systems
+
+Based on the whitepaper from Miguel Masmano, Ismael Ripoll & Alfons Crespo.
+(See paper here: http://www.gii.upv.es/tlsf/files/ecrts04_tlsf.pdf)
+Even more information can be found here: http://www.gii.upv.es/tlsf/
+
+Provides allocation/deallocation of memory blocks in constant (O(1)) time
+
+The structure contains an array indexed by log(2, size). In other words, requests are split up based on the most significant bit of the requested size. Each entry in the array contains a pointer to the second level of the structure, which further partions the free blocks of each slab size into x more groups, where x is a configurable constant (in this particular implementation, x=16). This partioning is implemented by an array of size = x, and is indexed by taking the value of the log(2,x) bits that come after the most significant one. Each value 
+
+----------------------------------------------------------------
+|Main structure: Contains...									|
+|	-Segregated List(array of pointers to second levels)		|
+|	-Bitmap showing which levels have free blocks				|
+|																|	
+|	Blocks fit into different size ranges:						|								|
+|																|
+|				|2^31|...|2^9|2^8|2^7|2^6|2^5|2^4				|
+-----------------------------------------------------------------
+							|			|
+							|			|		-------------------------
+							|			|		|Level Two				|
+-------------------------	|			|_____>	| -	Array of free lists	|
+|Level Two				|<__|					| - Bitmap				|
+| -	Array of free lists	|						-------------------------
+| - Bitmap				|
+|	|	|  ...	|	|	|
+-------------------------
+	  |				|
+	  |				|
+------------	------------	
+|Free_Block |	|Free_Block |
+|			|	|			|
+|			|	|			|
+-------------	-------------
+	  |
+	  |				
+	  |				
+------------	
+|Free_Block |	
+|			|	
+|			|	
+-------------	  
+
