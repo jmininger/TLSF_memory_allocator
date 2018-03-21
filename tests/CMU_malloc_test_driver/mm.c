@@ -58,7 +58,7 @@ int mm_init(void)
     {
         p_heap = (void*)((ptrdiff_t)p_heap & ~(8 - 1));
     }
-    tlsf_init_struct(p_heap, MAX_HEAP);
+    tlsf_init(p_heap, MAX_HEAP);
     return 0;
 }
 
@@ -80,10 +80,10 @@ void *mm_malloc(size_t size)
     void* heap_low = mem_heap_lo();
     if((ptrdiff_t)heap_low % ALIGNMENT_NUM != 0)
     {
-        heap_low = (void*)((ptrdiff_t)heap_low & ~(8 - 1));
+        heap_low = (void*)((ptrdiff_t)heap_low & ~(ALIGNMENT_NUM - 1));
     }
-    TLSF_t* tlsf = (TLSF_t*)heap_low;
-    return tlsf_malloc(size, tlsf);
+    void* tlsf = (void*)heap_low;
+    return tlsf_malloc(tlsf, size);
 }
 
 /*
@@ -94,10 +94,10 @@ void mm_free(void *ptr)
     void* heap_low = mem_heap_lo();
     if((ptrdiff_t)heap_low % ALIGNMENT_NUM != 0)
     {
-        heap_low = (void*)((ptrdiff_t)heap_low & ~(8 - 1));
+        heap_low = (void*)((ptrdiff_t)heap_low & ~(ALIGNMENT_NUM - 1));
     }
-    TLSF_t *tlsf = (TLSF_t*)heap_low;
-    tlsf_free(ptr, tlsf);
+    void *tlsf = (void*)heap_low;
+    tlsf_free(tlsf, ptr);
 }
 
 /*

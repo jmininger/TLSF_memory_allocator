@@ -3,40 +3,110 @@
 #include <stddef.h>
 #include <limits.h>
 #include <assert.h>
+#include <stdbool.h>
 
+#include <signal.h>
 #include "tlsf.h"
 
 typedef char* byte_ptr;
 typedef uint64_t bitmap_t;
 
-#define MAX_BIT_INDEX ((size_t)(log(UINT_MAX)/log(2)))
-#define FLI_INDEX_SIZE  (FLI - MBS_LOG2)
-/****************************************************************************************/
+/*	CONSTANTS	*/
+// enum{
+// 	MSIG_BIT = 31,
+// 	MIN_BS_BIT = 4,
+// 	MIN_BS = 16
+// };
 
-// typedef struct Block_Header {
-// 	size_t size;               		  /* Should this include the size of the header? */
-// 	struct Block_Header *prev_block;  /* Boundary Tag for constant time coalescing  */
-// } Block_Header;
-
-// typedef struct Free_Header {
-// 	Block_Header base;
-// 	struct Free_Header *prev_free;
-// 	struct Free_Header *next_free;
-// } Free_Header;
-
-// typedef Free_Header* Free_List;
-
-// typedef struct Second_Level {
-// 	uint64_t bitmap;							/* Move the sl bitmap into the TLFS_t by making an array?*/
-// 	Free_List seg_list[powerBaseTwo(SLI)];		/* Segregated list */
-// } Second_Level;
-
-// typedef struct TLSF_t {
-// 	uint64_t fl_bitmap;
-// 	Second_Level *sl_list[FLI];	/* Second level list */
-// } TLSF_t;
+#define FLI_INDEX_SIZE  (FLI - MBS_BIT)
+#define powerBaseTwo(x) (1<<x)
 
 /****************************************************************************************/
+
+/* Main Data Structures */
+
+/* Block Header 
+ * 	Every chunk of memory--free or used--
+ *	  contains a block header
+ */
+typedef struct Block_Header {
+	size_t size;               		  /* Block size--does not include header size */
+	struct Block_Header *prev_block;  /* Boundary Tag for constant time coalescing  */
+} Block_Header;
+
+/* Free Header 
+ * 	Holds a block header and 
+ */
+typedef struct Free_Header {
+	Block_Header base;
+	struct Free_Header *prev_free;
+	struct Free_Header *next_free;
+} Free_Header;
+
+typedef Free_Header* Free_List;
+
+/* Second Level structure 
+ * 	Represents a size class
+ */
+typedef struct Second_Level {
+	uint64_t bitmap;							/* Shows availibity in each size class */
+	Free_List seg_list[powerBaseTwo(SLI)];		/* Segregated list */
+} Second_Level;
+
+/* TLSF structure 
+ * 	Each memory pool has one at 
+ *   the beginning of the pool
+ */
+typedef struct TLSF_t {
+	uint64_t fl_bitmap;			/* First-level bitmap */
+	Second_Level *sl_list[FLI];	/* Second-level list */
+} TLSF_t;
+
+#define TLSF_SIZE (sizeof(TLSF_t)+sizeof(Second_Level)*FLI)
+
+/*****************************************************************************************
+*	Alignment Operations 																 *
+*****************************************************************************************/
+
+static bool isAligned(size_t size)
+{
+	return ((ALIGNMENT-1)&size) == 0;
+}
+
+static size_t alignSizeUp(size_t size)
+{
+	if(isAligned(size))
+	{
+		return size;
+	}
+	else
+	{
+		return (size& ~(ALIGNMENT - 1));
+	}
+}
+
+static bool isPtrAligned(void *ptr)
+{
+	return (ptrdiff_t)ptr % ALIGNMENT == 0;
+}
+
+static void* alignPtrUp(void* p)
+{
+	if(isPtrAligned(p))
+		return p;
+	else
+		return (void*)((ptrdiff_t)p & ~(ALIGNMENT - 1));
+}
+
+/*****************************************************************************************
+*	Block Operations -																	 *
+*		Since 8 bit alignment guarantees that the least significant 3 bits on any blocks *
+*		size will be 0, we can use these three bits to store information. In our case,   *
+*		the least significant bit stores whether or not the block is free (useful for    *
+*		checking to see if we can coalesce phycically adjacent blocks), and the second   *
+*		least significant bit stores whether or not the block is the last physical       *
+*		block in the entire pool. 														 *
+*****************************************************************************************/
 
 static inline bool isLastBlock(Block_Header *block)
 {
@@ -48,16 +118,8 @@ static inline void setBlockToLast(Block_Header *block)
 }
 static inline void setBlockToNotLast(Block_Header *block)
 {
-	block->size = (~((~block->size) | 2 ));
+	block->size = (~ ((~block->size) | 2 ) );
 }
-/** Bit Shifting Macros for free_flag on size variable */
-// #define is_free(size) (size & 1) //if flag is set to 1, it is free and returns 1 
-// #define set_to_free(size) (size | 1)  
-// #define set_to_used(size) (~((~size) | 1 ))
-// #define set_bit(bitmap, bit)   (bitmap | (1<<bit))
-// #define unset_bit(bitmap, bit) (~ (~bitmap | (1<<bit)) )
-//#define get_block_size(size) (size >> 2 << 2)//clear last two bits to 0
-//Note: Size should already be a multiple of ALIGN, and when being set, the last two bits must be reset
 static inline bool isBlockFree(Block_Header *block)
 {
 	return (block->size & 1);
@@ -70,6 +132,10 @@ static inline void setBlockToUsed(Block_Header *block)
 {
 	block->size = (~((~block->size) | 1 ));
 }
+
+/*****************************************************************************************
+*	Bitmap Operations															 *
+*****************************************************************************************/
 static inline bool isBitSet(bitmap_t bitmap, size_t bit)
 {
 	return (bitmap & (1<<bit)) != 0;
@@ -84,55 +150,46 @@ static inline bitmap_t unsetBit(bitmap_t bitmap, size_t bit)
 	return (~ (~bitmap | (1<<bit)) );
 }
 
-//#define segListIsEmpty(bitmap) (bitmap==0)
-// static inline bool isSegListEmpty(TLSF_t *tlsf)
-// {
-// 	return (tlsf->fl_bitmap == 0);
-// }
-// static inline int two_power(x)
-// {
-// 	return (1<<x);
-// }
-
 static inline bool isSegListEmpty(Second_Level* sl)
 {
 	return (sl->bitmap == 0);
 }
 
-/****************************************************************************************/
-
+/*****************************************************************************************
+*	Bitmap Indexing 																	 *
+*****************************************************************************************/
 static size_t getFirstIndex(size_t size)
 {
-	if(size < MBS)
+	if(size < MIN_BLKSZ)
 	{
 		return 0;
 	}
 	else
 	{
-		int i = 0; 
+		int i = MBS_BIT;
+		size>>=MBS_BIT;
 		while(size >>= 1)
 		{
 			i++;
 		}
-		return (size_t)i - MBS_LOG2;		/* Alternative Method: (log(size)/log(2)); */
+		return (size_t)i - MBS_BIT;		/* Alternative Method: (log(size)/log(2)); */
 	}
 }
 
 static inline size_t getSecondIndex(size_t size, size_t first_index)
 {
 	/*Possibility of overflow is concerning here*/
-	first_index+=MBS_LOG2;
+	first_index+=MBS_BIT;
 	return (size - powerBaseTwo(first_index)) / powerBaseTwo((first_index-SLI));
-	//return ((size - powerBaseTwo(first_index)) * (powerBaseTwo(SLI) / powerBaseTwo(first_index)));
 }
 
-/****************************************************************************************/
-
+/*****************************************************************************************
+*	General Block operations 															 *
+*****************************************************************************************/
 static inline Block_Header* getFreeBlockBase(Free_Header* free_block)
 {
 	return &(free_block->base);
 }
-
 static inline Block_Header* castFreeToBase(Free_Header* free_block)
 {
 	/*  
@@ -145,13 +202,10 @@ static inline Block_Header* castFreeToBase(Free_Header* free_block)
 	 */
 	return (Block_Header*)free_block;	
 }
-
 static inline size_t getBlockSize(Block_Header* block)
 {
 	return ((block->size) >> 2 << 2);
 }
-// /*  Get Indices  */
-
 static inline byte_ptr getDataStart(Block_Header* block)
 {
 	return ((byte_ptr)(block)) + sizeof(Block_Header);
@@ -167,30 +221,10 @@ static inline Block_Header* getNextPhysicalBlock(Block_Header* block)
 			((Block_Header*) (getDataStart(block) + getBlockSize(block)));
 }
 
-// /****************************************************************************************/
 
-static bool isAligned(size_t size)
-{
-	return ((ALIGNMENT-1)&size) == 0 ? true:false;
-}
-static size_t alignSize(size_t size)
-{
-	if(isAligned(size))
-	{
-		return size;
-	}
-	else
-	{
-		return (size& ~(ALIGNMENT - 1));
-	}
-}
-static bool ptrIsAligned(void *ptr)
-{
-	return (ptrdiff_t)ptr % ALIGNMENT == 0;
-}
-
-
-// /****************************************************************************************/
+/*****************************************************************************************
+*	Free List Operations 																 *
+*****************************************************************************************/
 
 static void removeListHead(Free_Header* head, TLSF_t* tlsf)
 {
@@ -200,11 +234,9 @@ static void removeListHead(Free_Header* head, TLSF_t* tlsf)
 	size_t si = getSecondIndex(size, fi);
 
 	Second_Level *s_level = tlsf->sl_list[fi];
-	s_level->seg_list[si] = head->next_free;
-
 	if(head->next_free == NULL)
 	{
-		s_level->bitmap = unsetBit(s_level->bitmap, si); //Make sure this expression acts atomically
+		s_level->bitmap = unsetBit(s_level->bitmap, si);
 		if(isSegListEmpty(s_level))
 		{
 			//No free blocks in this range
@@ -213,16 +245,18 @@ static void removeListHead(Free_Header* head, TLSF_t* tlsf)
 	}
 	else
 	{
-		head->next_free->prev_free = NULL; /* This block is now the head of the list */
+		head->next_free->prev_free = NULL; 
 	}
+	/* head->next_free is now the head of the list */
+	s_level->seg_list[si] = head->next_free;
 }
 
 static void removeFromFreeList(Free_Header* free_block, TLSF_t* tlsf)
 {
-	Free_Header *prev_free = free_block->prev_free;
-	Free_Header *next_free = free_block->next_free;
+	Free_Header *prev_elem = free_block->prev_free;
+	Free_Header *next_elem = free_block->next_free;
 
-	if(!prev_free)
+	if(!prev_elem)
 	{
 		removeListHead(free_block, tlsf);
 		/* By removing head, either the list can either be completely empty,
@@ -230,65 +264,21 @@ static void removeFromFreeList(Free_Header* free_block, TLSF_t* tlsf)
 			of this list needs to be accessed by the tlsf structure 
 		*/
 	}
-	else if(!next_free)
+	else if(!next_elem)
 	{
-		prev_free->next_free = NULL;
+		/* free_block is the end of the list */
+		prev_elem->next_free = NULL;
 	}
 	else
 	{
 		//Remove free_block from List
-		prev_free->next_free = next_free;
-		next_free->prev_free = prev_free;
+		prev_elem->next_free = next_elem;
+		next_elem->prev_free = prev_elem;
 	}
 	/* It is no longer a free block */
 	free_block->prev_free=NULL;
 	free_block->next_free=NULL;
 }
-
-
-static Block_Header* coalescePrev(Block_Header* block, Free_Header* prev, TLSF_t* tlsf)
-{
-	// if(block1 >= block2)
-	// 	return NULL;
-	size_t new_size = sizeof(Block_Header) + 
-					  getBlockSize(getFreeBlockBase(prev)) + 
-					  getBlockSize(block);
-	removeFromFreeList(prev, tlsf);
-	Block_Header *new_block = castFreeToBase(prev);
-	new_block->size = new_size;
-	setBlockToUsed(new_block);
-	if(!isLastBlock(new_block))
-	{
-		Block_Header *next_block = getNextPhysicalBlock(new_block);
-		next_block->prev_block = new_block;
-	}
-	return new_block; 
-}
-
-	//BLOCK1 must be the the block that is being 
-
-static Block_Header* coalesceNext(Block_Header* block, Free_Header* next, TLSF_t* tlsf)
-{
-	// if(block1 >= block2)
-	// 	return NULL;
-	size_t new_size = 
-			getBlockSize(getFreeBlockBase(next)) + 
-			sizeof(Block_Header) + 
-			getBlockSize(block);
-	removeFromFreeList(next, tlsf);
-	block->size=new_size;
-	setBlockToUsed(block);
-	if(!isLastBlock(getFreeBlockBase(next)))
-	{
-		Block_Header *next_block = getNextPhysicalBlock(getFreeBlockBase(next));
-		next_block->prev_block = block;
-	}
-	
-	return block;
-}
-
-// /****************************************************************************************/
-
 
 static void insertFreeBlock(TLSF_t *tlsf, Block_Header* block)
 {
@@ -305,7 +295,10 @@ static void insertFreeBlock(TLSF_t *tlsf, Block_Header* block)
 	Free_Header *free_block = (Free_Header*)block;
 	free_block->prev_free = NULL;
 	free_block->next_free = s_level->seg_list[si];
-	
+	if(s_level->seg_list[si])
+	{
+		s_level->seg_list[si]->prev_free=free_block;
+	}
 	s_level->seg_list[si] = free_block;
 	if(!isBitSet(s_level->bitmap, si))
 	{
@@ -313,31 +306,91 @@ static void insertFreeBlock(TLSF_t *tlsf, Block_Header* block)
 	}
 }
 
+/*****************************************************************************************
+*	Coalescing Blocks 		 															 *
+*****************************************************************************************/
+static Block_Header* coalescePrev(Block_Header* block, Free_Header* prev, TLSF_t* tlsf)
+{
+	// if(block1 >= block2)
+	// 	return NULL;
+	removeFromFreeList(prev, tlsf);
+	Block_Header *free_base = castFreeToBase(prev);
+	size_t new_size = sizeof(Block_Header) + 
+					  getBlockSize(free_base) + 
+					  getBlockSize(block);
+	free_base->size = new_size;
+	setBlockToUsed(free_base);
+	if(isLastBlock(block))
+	{
+		setBlockToLast(free_base);
+	}
+	else
+	{
+		Block_Header *next_block = getNextPhysicalBlock(free_base);
+		next_block->prev_block = free_base;
+	}
+	return free_base; 
+}
+
+static Block_Header* coalesceNext(Block_Header* block, Free_Header* next, TLSF_t* tlsf)
+{
+	// if(block1 >= block2)
+	// 	return NULL;
+	size_t new_size = 
+			getBlockSize(getFreeBlockBase(next)) + 
+			sizeof(Block_Header) + 
+			getBlockSize(block);
+	removeFromFreeList(next, tlsf);
+	block->size=new_size;
+	setBlockToUsed(block);
+	if(isLastBlock(getFreeBlockBase(next)))
+	{
+		setBlockToLast(block);
+	}
+	else
+	{
+		Block_Header *next_block = getNextPhysicalBlock(getFreeBlockBase(next));
+		next_block->prev_block = block;
+	}
+	
+	return block;
+}
+/*****************************************************************************************
+*	General Block operations 															 *
+*****************************************************************************************/
+
 static int findCloseFitIndex(bitmap_t bitmap, size_t start)
 {
 	//start is the index to start with
 	//if -1 is returned, no space is available
-	//TODO: before loop, check if 0 case
-	for(unsigned i = start; i<=MAX_BIT_INDEX; i++)
+	
+	if((~(powerBaseTwo(start) - 1) & bitmap) == 0)
 	{
-		if(isBitSet(bitmap, i))
-		{
-			return i;
-		}
+		return -1;
 	}
-	return -1;
+	else
+	{
+		for(unsigned i = start; i<=BITMAP_INDEX_SZ; i++)
+		{
+			if(isBitSet(bitmap, i))
+			{
+				return i;
+			}
+		}
+		return -1;
+	}
 }
 
 static Free_Header* recursiveFindFreeBlock(TLSF_t* tlsf, size_t fi_min, size_t si_min)
 {
-	size_t fl_index = findCloseFitIndex(tlsf->fl_bitmap, fi_min);
+	int fl_index = findCloseFitIndex(tlsf->fl_bitmap, fi_min);
 	if(fl_index == -1)
 	{
 		return NULL;
 	}
 	Second_Level *s_level = tlsf->sl_list[fl_index];
 	size_t si_bit = (fl_index==fi_min)?si_min:0;
-	size_t sl_index = findCloseFitIndex(s_level->bitmap, si_bit);
+	int sl_index = findCloseFitIndex(s_level->bitmap, si_bit);
 	if(sl_index==-1)
 	{
 		fl_index++;
@@ -355,26 +408,29 @@ static void splitBlock(TLSF_t* tlsf, Block_Header* block, size_t size_needed)
 	size_t block_size = getBlockSize(block);
 	bool isLast = isLastBlock(block);
 	size_t leftover = block_size - size_needed;
-	if(leftover >= MBS)
+
+	setBlockToUsed(block);
+	if(leftover >= MIN_BLKSZ)
 	{
 		Block_Header *free_block = (Block_Header*)(getDataStart(block)+size_needed);
-		block->size=size_needed;
-		setBlockToUsed(block);
 		free_block->size=leftover-sizeof(Block_Header);
 		free_block->prev_block=block;
+		if(!isLast)
+		{
+			getNextPhysicalBlock(block)->prev_block = free_block;
+		}
+		block->size=size_needed;
+		setBlockToNotLast(block);
 		if(isLast)
 		{
-			setBlockToNotLast(block);
 			setBlockToLast(free_block);
 		}
 		else
 		{
-			setBlockToNotLast(block);
 			setBlockToNotLast(free_block);
 		}
 		insertFreeBlock(tlsf, free_block);
 	}
-
 }
 
 static Block_Header* getFreeBlock(TLSF_t* tlsf, size_t size)
@@ -394,33 +450,29 @@ static Block_Header* getFreeBlock(TLSF_t* tlsf, size_t size)
 		return block;
 	}
 }
+/*****************************************************************************************
+*	API Functions 																		 *
+*****************************************************************************************/
 
-// /****************************************************************************************/
 
-
-TLSF_t* tlsf_init_struct(void* pool_start, size_t pool_size)
+void* tlsf_init(void* pool_start, size_t pool_size)
 {
-	if(!ptrIsAligned(pool_start))
+	if(!isPtrAligned(pool_start))
 	{
 		printf("pool_start pointer: %td is not aligned\n", (ptrdiff_t)pool_start);
 		return NULL;
 	}
 	/*
-		Can we assume that structs are packed for proper alignment?
-	*/
-	/* Safety Checks? */
-
-	/*
-		This is the case b/c if the two are equal, then you will have a bucket 
-			for each possible size between 2^MBS_LOG2 and 2^(MBS_LOG2 + 1). If SLI is ever greater
-			than MBS, then you would have the possibility of having the SLI bits being greater than 
-			all of the bits in the MBS. 
-			10000b = 16 = MBS
+		The assertion below is the case b/c if the two are equal, then you will have a bucket 
+			for each possible size between 2^MBS_BIT and 2^(MBS_BIT + 1). If SLI is ever greater
+			than MIN_BLKSZ, then you would have the possibility of having the SLI bits being greater than 
+			all of the bits in the MIN_BLKSZ. 
+			10000b = 16 = MIN_BLKSZ
 		FI =1
 		SI = 0000 if SLI > 4, there are not enough bits to determine the bucket 
 	*/
-	assert(MBS_LOG2 >= SLI);
-	assert(pool_size >= sizeof(TLSF_t));
+	assert(MBS_BIT >= SLI);
+	assert(pool_size >= TLSF_SIZE);
 	/*
 		Structure Creation
 	*/
@@ -439,110 +491,156 @@ TLSF_t* tlsf_init_struct(void* pool_start, size_t pool_size)
 		}
 		free_space = (byte_ptr)(sl) + sizeof(Second_Level);
 	}
+	free_space = (byte_ptr)alignPtrUp(free_space);
 
 	//Take the remaining chunk of memory and put it in a free list
-	/* 
-		If the assumption made above with regards to alignment is correct,
-		then block is guaranteed to be aligned
-	*/
-	Block_Header *block = (Block_Header*)free_space;
-	free_space = (byte_ptr)block + sizeof(Block_Header);
+	Block_Header *block = (Block_Header*)free_space;	
+	free_space = getDataStart(block);
 	byte_ptr pool_end = (byte_ptr)pool_start+pool_size;
 	size_t free_block_size = pool_end - free_space;
 	if(!isAligned(free_block_size))
 	{
-		free_block_size = alignSize(free_block_size) - ALIGNMENT;
+		/* Effectively aligns down */
+		free_block_size = alignSizeUp(free_block_size) - ALIGNMENT;
 	}
 	block->size = free_block_size;
 	setBlockToFree(block);
 	setBlockToLast(block);
 	block->prev_block = NULL;
 	insertFreeBlock(tlsf, block);
-	return tlsf;
+	return (void*)tlsf;
 }
 
-void* tlsf_malloc(size_t size, TLSF_t* tlsf)
+void printPool(void* pool)
 {
-	// make sure size + block header is a multiple of ALIGN
-	/*
-		1) Align/give it a bigger size if need be. 
-		2)
-	*/
-	if(!isAligned(size+sizeof(Block_Header)))
+	TLSF_t *tlsf = (TLSF_t*)pool;
+	//size_t tlsf_size = sizeof(TLSF_t) + sizeof(Second_Level)*powerBaseTwo(SLI);
+	//printf("%p ", pool);
+	Block_Header* pblock = (Block_Header*)alignPtrUp((void*)((byte_ptr)pool+(sizeof(Second_Level)*FLI_INDEX_SIZE + sizeof(TLSF_t))));
+	printf("%p\n", pblock);
+	printf("Current State: \n");
+	printf("TLSF Bitmap: %llu\n", tlsf->fl_bitmap);
+	while(!isLastBlock(pblock))
 	{
-		size = alignSize(size+sizeof(Block_Header));
+		printf("	Size:%lu, isFree:%s, prevPhys:%p, Header: %p, IsLastBlock: %s\n", 
+			getBlockSize(pblock),isBlockFree(pblock)?"Yup":"Nah",
+			pblock->prev_block, pblock, isLastBlock(pblock)?"Yes":"No");
+		pblock = getNextPhysicalBlock(pblock);
 	}
-	Block_Header *block = getFreeBlock(tlsf, size);
+	printf("	Size:%lu, isFree:%s, prevPhys:%p, Header: %p, IsLastBlock: %s\n", 
+			getBlockSize(pblock),isBlockFree(pblock)?"Yup":"Nah",
+			pblock->prev_block, pblock, isLastBlock(pblock)?"Yes":"No");
+
+}
+void printFreeLists(void* pool)
+{
+	TLSF_t *tlsf = (TLSF_t*)pool;
+	for(size_t i = 0; i<FLI_INDEX_SIZE; i++)
+	{
+		printf("Index:%lu, SizeClass:%lu\n",i,i+MBS_BIT);
+		Second_Level *sl = tlsf->sl_list[i];
+		if(sl->bitmap == 0)
+			printf("	No Free List\n");
+		else
+		{
+			for(size_t j =0; j<powerBaseTwo(SLI); j++)
+			{
+				if(sl->seg_list[j]==NULL)
+					printf("		No seg list\n");
+				else
+				{
+					Free_Header* fh = sl->seg_list[j];
+					while(fh!=NULL){
+						printf("		Size:%lu, ",fh->base.size);
+						fh=fh->next_free;
+					}
+					printf("\n");
+				}
+			}
+		}
+	}
+}
+bool consistencyCheck(void* pool)
+{
+	TLSF_t *tlsf = (TLSF_t*)pool;
+	int fl_count = 0;
+	int pool_count = 0;
+	for(size_t i = 0; i<FLI_INDEX_SIZE; i++)
+	{
+		Second_Level *sl = tlsf->sl_list[i];
+		if(sl->bitmap != 0)
+		{
+			for(size_t j =0; j<powerBaseTwo(SLI); j++)
+			{
+				if(sl->seg_list[j]!=NULL)
+				{
+					Free_Header* fh = sl->seg_list[j];
+					while(fh!=NULL)
+					{
+						fl_count++;
+						fh=fh->next_free;
+					}
+				}
+			}
+		}
+	}
+	Block_Header* pblock = (Block_Header*)alignPtrUp((void*)((byte_ptr)pool+(sizeof(Second_Level)*FLI_INDEX_SIZE + sizeof(TLSF_t))));
+	Block_Header* prev = NULL;
+	while(!isLastBlock(pblock))
+	{
+		if(isBlockFree(pblock))
+			pool_count++;
+		if(prev != pblock->prev_block)
+			raise(SIGSEGV);
+		prev = pblock;
+		pblock = getNextPhysicalBlock(pblock);
+	}
+	if(isBlockFree(pblock))
+			pool_count++;
+	return (fl_count==pool_count);
+}
+
+void* tlsf_malloc(void* tlsf, size_t size)
+{
+	bool cc = true;
+	TLSF_t *p_tlsf = (TLSF_t*)tlsf;
+	size = alignSizeUp(size+sizeof(Block_Header));
+	Block_Header *block = getFreeBlock(p_tlsf, size);
 	if(!block)
 	{
 		printf("There are no free blocks of %lu size or greater", size);
 		return NULL;
 	}
+	// printf("Allocate\n");
+	//printPool(p_tlsf);
+	cc = consistencyCheck(tlsf);
+	// if(!cc)
+	// 	raise(SIGSEGV);
 	return (void*)getDataStart(block);
 }
 
-void tlsf_free(void* ptr, TLSF_t *tlsf)
+void tlsf_free(void *tlsf, void* ptr)
 {
+	bool cc = true;
+	TLSF_t *p_tlsf = (TLSF_t*)tlsf;
 	Block_Header *block = getBlockHeader(ptr);
 
 	/*Check left and right block to possibly coalesce*/
 	if(block->prev_block && isBlockFree(block->prev_block))
 	{
 		Free_Header *prev_phys = (Free_Header*)(block->prev_block);
-		block = coalescePrev(block, prev_phys, tlsf);
+		block = coalescePrev(block, prev_phys, p_tlsf);
 	}
 	Block_Header* adjacent = getNextPhysicalBlock(block);
 	if(adjacent && isBlockFree(adjacent))
 	{
 		Free_Header* next_phys=(Free_Header*)adjacent;
-		coalesceNext(block, next_phys, tlsf);
+		coalesceNext(block, next_phys, p_tlsf);
 	}
-	insertFreeBlock(tlsf, block);
+	insertFreeBlock(p_tlsf, block);
+	// printf("Free\n");
+	// printPool(p_tlsf);
+	cc = consistencyCheck(tlsf);
+	// if(!cc)
+	// 	raise(SIGSEGV);
 }
-
-
-// /*TODO:
-// 	Write all the size and bit macros 
-// 	Figure out a solution to cases where block is first/only block on the free list
-// 	Finish the coalesce functions
-// 	Write function for iterating through bitmaps
-
-// 	Finish the can coalesce function
-	
-// 	Write getFreeBlock()
-// 	Make sure all blocks are on 8 bit alignment
-
-// Refactoring
-// 	Remove all spacing in arrow functions
-// 	Make sure inline/static comes before return type
-// 	Move function definitions and non static variables to header file
-// 	Write a casting macro to make it more expressive
-// 	Write a void * /free space type typedef
-// 	Macro to get to the next bit of free space (instead of adding 1 to a ptr of the current type and casting it)
-// 	Figure out the size of free space and make
-// 	Add a call to the "put_on free_space()" function
-
-// */
-/*
-	Note, we should never be actually interacting with the actual data chunks, always just skipping over them
-
-	Constants: FLI min(log2(memPoolSize), 31), SLI 2^x, MBS(min block size)
-
-	initTLSF_struct -- After putting the struct in its place, just assign the rest of free space 
-		as a block into a class? Instead of "premature splitting"
-	destroy_tlsf_struct
-	get_a_free_block -- determine index, if the list is non-empty 
-			set the header from free to full and return a ptr to the end of the header
-			else, use the bitmaps to find the next available free list in constant time 
-			(find first set bitmap instruction) and then split that block up into 
-			two smaller blocks--putting the new smaller block onto the proper list
-			If none can be found...a NULL ptr is returned
-	insert_free_block -- first check for the possiblilty of coelescing, then either coalesce or add to the list,
-			making sure to change to the proper header
-	coalesce_two_free_blocks --(check both the previous and next physical blocks)
-
-	num of tables = (2^SLI)per SL, FL = FLI-log2(MBS)
-Compiler automatically packs structs to be aligned properly, so any alignment
-needed manually should only be applied when we have a void* of free space, and
-are assigning to that
-*/

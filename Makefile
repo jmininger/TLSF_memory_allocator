@@ -24,7 +24,7 @@ CXX=g++
 # the compiler doesn't generate warnings in Google Test headers.
 CPPFLAGS += -isystem $(GTEST_DIR)/include
 
-CXXFLAGS = -std=c++11 -I ${USER_DIR}
+CXXFLAGS = -std=c++11 -I ${USER_DIR} -g
 
 # All tests produced by this Makefile.  Remember to add new tests you
 # created to the list.

@@ -15,7 +15,31 @@
 			EXPECT_NE(isAligned(i), true);
 	}
 	
+	TEST(API, can_init_allocate_and_free)
+	{
+		void* p = malloc(1024*100);
+		void *tlsf = tlsf_init(p, 1024*100);
+		void* p1 = tlsf_malloc(tlsf,305);
+		void* p2 = tlsf_malloc(tlsf,3456);
+		void* p3 = tlsf_malloc(tlsf,23);
+		void* p4 = tlsf_malloc(tlsf,305);
+		void* p5 = tlsf_malloc(tlsf,987);
+		void* p6 = tlsf_malloc(tlsf,346);
+		void* p7 = tlsf_malloc(tlsf,634);
+		tlsf_free(tlsf, p2);
+		tlsf_free(tlsf, p3);
+		void* p8 = tlsf_malloc(tlsf,233);
+		void* p9 = tlsf_malloc(tlsf,10);
+		tlsf_free(tlsf, p1);
+		tlsf_free(tlsf, p5);
+		tlsf_free(tlsf, p6);
+		tlsf_free(tlsf, p4);
+		tlsf_free(tlsf, p9);
+		tlsf_free(tlsf, p7);
+		tlsf_free(tlsf, p8);
+		free(p);
 
+	}
 
 // TEST(Bitmap, can_set_bits)
 // {
