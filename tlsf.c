@@ -410,7 +410,7 @@ static void splitBlock(TLSF_t* tlsf, Block_Header* block, size_t size_needed)
 	size_t leftover = block_size - size_needed;
 
 	setBlockToUsed(block);
-	if(leftover >= MIN_BLKSZ)
+	if(leftover >= (MIN_BLKSZ+sizeof(Block_Header*)))
 	{
 		Block_Header *free_block = (Block_Header*)(getDataStart(block)+size_needed);
 		free_block->size=leftover-sizeof(Block_Header);
@@ -570,6 +570,8 @@ bool consistencyCheck(void* pool)
 		Second_Level *sl = tlsf->sl_list[i];
 		if(sl->bitmap != 0)
 		{
+			if(sl->bitmap > powerBaseTwo(powerBaseTwo(SLI)))
+				raise(SIGSEGV);
 			for(size_t j =0; j<powerBaseTwo(SLI); j++)
 			{
 				if(sl->seg_list[j]!=NULL)

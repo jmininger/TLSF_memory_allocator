@@ -3,8 +3,7 @@
 #
 ALLOCATOR_DIR =../..
 CC = gcc
-CFLAGS = -Wall -m32 -g -I $(ALLOCATOR_DIR)
-#-O2
+CFLAGS = -Wall -m32 -O2 -I $(ALLOCATOR_DIR)
 
 OBJS = mdriver.o mm.o memlib.o fsecs.o fcyc.o clock.o ftimer.o ${ALLOCATOR_DIR}/tlsf.o
 
