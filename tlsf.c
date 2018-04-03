@@ -5,25 +5,22 @@
 #include <assert.h>
 #include <stdbool.h>
 
-#include <signal.h>
 #include "tlsf.h"
 
-typedef char* byte_ptr;
-typedef uint64_t bitmap_t;
-
-/*	CONSTANTS	*/
-// enum{
-// 	MSIG_BIT = 31,
-// 	MIN_BS_BIT = 4,
-// 	MIN_BS = 16
-// };
+/****************************************************************************************/
 
 #define FLI_INDEX_SIZE  (FLI - MBS_BIT)
+#define BITMAP_INDEX_SZ (64-MBS_BIT)
+
 #define powerBaseTwo(x) (1<<x)
 
 /****************************************************************************************/
 
 /* Main Data Structures */
+
+typedef char* byte_ptr;
+typedef uint64_t bitmap_t;
+
 
 /* Block Header 
  * 	Every chunk of memory--free or used--
@@ -63,40 +60,6 @@ typedef struct TLSF_t {
 } TLSF_t;
 
 #define TLSF_SIZE (sizeof(TLSF_t)+sizeof(Second_Level)*FLI)
-
-/*****************************************************************************************
-*	Alignment Operations 																 *
-*****************************************************************************************/
-
-static bool isAligned(size_t size)
-{
-	return ((ALIGNMENT-1)&size) == 0;
-}
-
-static size_t alignSizeUp(size_t size)
-{
-	if(isAligned(size))
-	{
-		return size;
-	}
-	else
-	{
-		return (size& ~(ALIGNMENT - 1));
-	}
-}
-
-static bool isPtrAligned(void *ptr)
-{
-	return (ptrdiff_t)ptr % ALIGNMENT == 0;
-}
-
-static void* alignPtrUp(void* p)
-{
-	if(isPtrAligned(p))
-		return p;
-	else
-		return (void*)((ptrdiff_t)p & ~(ALIGNMENT - 1));
-}
 
 /*****************************************************************************************
 *	Block Operations -																	 *
@@ -153,6 +116,32 @@ static inline bitmap_t unsetBit(bitmap_t bitmap, size_t bit)
 static inline bool isSegListEmpty(Second_Level* sl)
 {
 	return (sl->bitmap == 0);
+}
+/*****************************************************************************************
+*	Alignment Operations 																 *
+*****************************************************************************************/
+
+static bool isAligned(size_t size)
+{
+	return ((ALIGNMENT-1)&size) == 0;
+}
+
+static size_t alignSizeUp(size_t size)
+{
+	return isAligned(size)? size : (size& ~(ALIGNMENT - 1));
+}
+
+static bool isPtrAligned(void *ptr)
+{
+	return (ptrdiff_t)ptr % ALIGNMENT == 0;
+}
+
+static void* alignPtrUp(void* p)
+{
+	if(isPtrAligned(p))
+		return p;
+	else
+		return (void*)((ptrdiff_t)p & ~(ALIGNMENT - 1));
 }
 
 /*****************************************************************************************
@@ -511,100 +500,9 @@ void* tlsf_init(void* pool_start, size_t pool_size)
 	return (void*)tlsf;
 }
 
-void printPool(void* pool)
-{
-	TLSF_t *tlsf = (TLSF_t*)pool;
-	//size_t tlsf_size = sizeof(TLSF_t) + sizeof(Second_Level)*powerBaseTwo(SLI);
-	//printf("%p ", pool);
-	Block_Header* pblock = (Block_Header*)alignPtrUp((void*)((byte_ptr)pool+(sizeof(Second_Level)*FLI_INDEX_SIZE + sizeof(TLSF_t))));
-	printf("%p\n", pblock);
-	printf("Current State: \n");
-	printf("TLSF Bitmap: %llu\n", tlsf->fl_bitmap);
-	while(!isLastBlock(pblock))
-	{
-		printf("	Size:%lu, isFree:%s, prevPhys:%p, Header: %p, IsLastBlock: %s\n", 
-			getBlockSize(pblock),isBlockFree(pblock)?"Yup":"Nah",
-			pblock->prev_block, pblock, isLastBlock(pblock)?"Yes":"No");
-		pblock = getNextPhysicalBlock(pblock);
-	}
-	printf("	Size:%lu, isFree:%s, prevPhys:%p, Header: %p, IsLastBlock: %s\n", 
-			getBlockSize(pblock),isBlockFree(pblock)?"Yup":"Nah",
-			pblock->prev_block, pblock, isLastBlock(pblock)?"Yes":"No");
-
-}
-void printFreeLists(void* pool)
-{
-	TLSF_t *tlsf = (TLSF_t*)pool;
-	for(size_t i = 0; i<FLI_INDEX_SIZE; i++)
-	{
-		printf("Index:%lu, SizeClass:%lu\n",i,i+MBS_BIT);
-		Second_Level *sl = tlsf->sl_list[i];
-		if(sl->bitmap == 0)
-			printf("	No Free List\n");
-		else
-		{
-			for(size_t j =0; j<powerBaseTwo(SLI); j++)
-			{
-				if(sl->seg_list[j]==NULL)
-					printf("		No seg list\n");
-				else
-				{
-					Free_Header* fh = sl->seg_list[j];
-					while(fh!=NULL){
-						printf("		Size:%lu, ",fh->base.size);
-						fh=fh->next_free;
-					}
-					printf("\n");
-				}
-			}
-		}
-	}
-}
-bool consistencyCheck(void* pool)
-{
-	TLSF_t *tlsf = (TLSF_t*)pool;
-	int fl_count = 0;
-	int pool_count = 0;
-	for(size_t i = 0; i<FLI_INDEX_SIZE; i++)
-	{
-		Second_Level *sl = tlsf->sl_list[i];
-		if(sl->bitmap != 0)
-		{
-			if(sl->bitmap > powerBaseTwo(powerBaseTwo(SLI)))
-				raise(SIGSEGV);
-			for(size_t j =0; j<powerBaseTwo(SLI); j++)
-			{
-				if(sl->seg_list[j]!=NULL)
-				{
-					Free_Header* fh = sl->seg_list[j];
-					while(fh!=NULL)
-					{
-						fl_count++;
-						fh=fh->next_free;
-					}
-				}
-			}
-		}
-	}
-	Block_Header* pblock = (Block_Header*)alignPtrUp((void*)((byte_ptr)pool+(sizeof(Second_Level)*FLI_INDEX_SIZE + sizeof(TLSF_t))));
-	Block_Header* prev = NULL;
-	while(!isLastBlock(pblock))
-	{
-		if(isBlockFree(pblock))
-			pool_count++;
-		if(prev != pblock->prev_block)
-			raise(SIGSEGV);
-		prev = pblock;
-		pblock = getNextPhysicalBlock(pblock);
-	}
-	if(isBlockFree(pblock))
-			pool_count++;
-	return (fl_count==pool_count);
-}
 
 void* tlsf_malloc(void* tlsf, size_t size)
 {
-	bool cc = true;
 	TLSF_t *p_tlsf = (TLSF_t*)tlsf;
 	size = alignSizeUp(size+sizeof(Block_Header));
 	Block_Header *block = getFreeBlock(p_tlsf, size);
@@ -613,17 +511,11 @@ void* tlsf_malloc(void* tlsf, size_t size)
 		printf("There are no free blocks of %lu size or greater", size);
 		return NULL;
 	}
-	// printf("Allocate\n");
-	//printPool(p_tlsf);
-	cc = consistencyCheck(tlsf);
-	// if(!cc)
-	// 	raise(SIGSEGV);
 	return (void*)getDataStart(block);
 }
 
 void tlsf_free(void *tlsf, void* ptr)
 {
-	bool cc = true;
 	TLSF_t *p_tlsf = (TLSF_t*)tlsf;
 	Block_Header *block = getBlockHeader(ptr);
 
@@ -640,9 +532,95 @@ void tlsf_free(void *tlsf, void* ptr)
 		coalesceNext(block, next_phys, p_tlsf);
 	}
 	insertFreeBlock(p_tlsf, block);
-	// printf("Free\n");
-	// printPool(p_tlsf);
-	cc = consistencyCheck(tlsf);
-	// if(!cc)
-	// 	raise(SIGSEGV);
 }
+
+// void printPool(void* pool)
+// {
+// 	TLSF_t *tlsf = (TLSF_t*)pool;
+// 	//size_t tlsf_size = sizeof(TLSF_t) + sizeof(Second_Level)*powerBaseTwo(SLI);
+// 	//printf("%p ", pool);
+// 	Block_Header* pblock = (Block_Header*)alignPtrUp((void*)((byte_ptr)pool+(sizeof(Second_Level)*FLI_INDEX_SIZE + sizeof(TLSF_t))));
+// 	printf("%p\n", pblock);
+// 	printf("Current State: \n");
+// 	printf("TLSF Bitmap: %llu\n", tlsf->fl_bitmap);
+// 	while(!isLastBlock(pblock))
+// 	{
+// 		printf("	Size:%lu, isFree:%s, prevPhys:%p, Header: %p, IsLastBlock: %s\n", 
+// 			getBlockSize(pblock),isBlockFree(pblock)?"Yup":"Nah",
+// 			pblock->prev_block, pblock, isLastBlock(pblock)?"Yes":"No");
+// 		pblock = getNextPhysicalBlock(pblock);
+// 	}
+// 	printf("	Size:%lu, isFree:%s, prevPhys:%p, Header: %p, IsLastBlock: %s\n", 
+// 			getBlockSize(pblock),isBlockFree(pblock)?"Yup":"Nah",
+// 			pblock->prev_block, pblock, isLastBlock(pblock)?"Yes":"No");
+
+// }
+// void printFreeLists(void* pool)
+// {
+// 	TLSF_t *tlsf = (TLSF_t*)pool;
+// 	for(size_t i = 0; i<FLI_INDEX_SIZE; i++)
+// 	{
+// 		printf("Index:%lu, SizeClass:%lu\n",i,i+MBS_BIT);
+// 		Second_Level *sl = tlsf->sl_list[i];
+// 		if(sl->bitmap == 0)
+// 			printf("	No Free List\n");
+// 		else
+// 		{
+// 			for(size_t j =0; j<powerBaseTwo(SLI); j++)
+// 			{
+// 				if(sl->seg_list[j]==NULL)
+// 					printf("		No seg list\n");
+// 				else
+// 				{
+// 					Free_Header* fh = sl->seg_list[j];
+// 					while(fh!=NULL){
+// 						printf("		Size:%lu, ",fh->base.size);
+// 						fh=fh->next_free;
+// 					}
+// 					printf("\n");
+// 				}
+// 			}
+// 		}
+// 	}
+// }
+// bool consistencyCheck(void* pool)
+// {
+// 	TLSF_t *tlsf = (TLSF_t*)pool;
+// 	int fl_count = 0;
+// 	int pool_count = 0;
+// 	for(size_t i = 0; i<FLI_INDEX_SIZE; i++)
+// 	{
+// 		Second_Level *sl = tlsf->sl_list[i];
+// 		if(sl->bitmap != 0)
+// 		{
+// 			if(sl->bitmap > powerBaseTwo(powerBaseTwo(SLI)))
+// 				raise(SIGSEGV);
+// 			for(size_t j =0; j<powerBaseTwo(SLI); j++)
+// 			{
+// 				if(sl->seg_list[j]!=NULL)
+// 				{
+// 					Free_Header* fh = sl->seg_list[j];
+// 					while(fh!=NULL)
+// 					{
+// 						fl_count++;
+// 						fh=fh->next_free;
+// 					}
+// 				}
+// 			}
+// 		}
+// 	}
+// 	Block_Header* pblock = (Block_Header*)alignPtrUp((void*)((byte_ptr)pool+(sizeof(Second_Level)*FLI_INDEX_SIZE + sizeof(TLSF_t))));
+// 	Block_Header* prev = NULL;
+// 	while(!isLastBlock(pblock))
+// 	{
+// 		if(isBlockFree(pblock))
+// 			pool_count++;
+// 		if(prev != pblock->prev_block)
+// 			raise(SIGSEGV);
+// 		prev = pblock;
+// 		pblock = getNextPhysicalBlock(pblock);
+// 	}
+// 	if(isBlockFree(pblock))
+// 			pool_count++;
+// 	return (fl_count==pool_count);
+// }
