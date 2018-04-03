@@ -21,6 +21,6 @@ tlsf.o: ${ALLOCATOR_DIR}/tlsf.c tlsf.h
 	$(CC) $(CFLAGS) -o tlsf.o
 
 clean:
-	rm -f *~ *.o mdriver
+	rm -f *~ *.o mdriver ${ALLOCATOR_DIR}/tlsf.o
 
 
