@@ -29,12 +29,12 @@ size class) in constant time
 When tlsf_free() is called, the block checks for the possibility of coalescing with adjacent
 free blocks and then returns the block to the free list 
 
-----------------------------------------------------------------
+-----------------------------------------------------------------
 |Main structure: Contains...									|
 |	-Segregated List(array of pointers to second levels)		|
 |	-Bitmap showing which levels have free blocks				|
-|																|	
-|	Blocks fit into different size ranges:						|								|
+|																|
+|	Blocks fit into different size ranges:						|
 |																|
 |				|2^31|...|2^9|2^8|2^7|2^6|2^5|2^4				|
 -----------------------------------------------------------------
