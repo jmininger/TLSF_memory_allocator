@@ -1,11 +1,22 @@
+Run the Makefile in tests/CMU_malloc_test_driver to build the test driver. 
+Then run 
+./mdriver -v -t traces
+to run all of the traces in the trace directory
+
 Tracefile:
-trace->sugg_heapsize //Not used
-trace->num_ids
-trace->num_ops
-trace->weight
 
-a/r/f index size (in case of f, just index)
+Format (based on data structures below)
 
+First 4 lines: 
+    trace->sugg_heapsize //Not used
+    trace->num_ids
+    trace->num_ops
+    trace->weight
+Following Lines:
+    a/r/f index size //Note: in case of f, no size is included
+
+
+CMU Trace Data Structures for Driver:
 typedef struct {
     enum {ALLOC, FREE, REALLOC} type; /* type of request */
     int index;                        /* index for free() to use later */

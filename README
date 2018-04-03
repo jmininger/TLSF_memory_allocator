@@ -4,9 +4,30 @@ Based on the whitepaper from Miguel Masmano, Ismael Ripoll & Alfons Crespo.
 (See paper here: http://www.gii.upv.es/tlsf/files/ecrts04_tlsf.pdf)
 Even more information can be found here: http://www.gii.upv.es/tlsf/
 
-Provides allocation/deallocation of memory blocks in constant (O(1)) time
+Tests:
+See the README in tests/ to build and run the tests. This project uses a test driver from
+Carnegie Mellon University to test the allocator on various trace files.
 
-The structure contains an array indexed by log(2, size). In other words, requests are split up based on the most significant bit of the requested size. Each entry in the array contains a pointer to the second level of the structure, which further partions the free blocks of each slab size into x more groups, where x is a configurable constant (in this particular implementation, x=16). This partioning is implemented by an array of size = x, and is indexed by taking the value of the log(2,x) bits that come after the most significant one. Each value 
+Use:
+void* tlsf_init(void* pool_start, size_t pool_size);
+void* tlsf_malloc(void* tlsf, size_t size);
+void tlsf_free(void *tlsf, void* ptr);
+
+Since the allocator is built for RT systems, no sbrk() syscall is used, and the 
+memory pool should be initialized before use. 
+
+How it works:
+Provides allocation/deallocation of memory blocks in constant, O(1), time
+
+The structure contains an array indexed by log(2, size). In other words, requests are split up based on the most significant bit of the requested size. Each entry in the array contains a pointer to the second level of the structure, which further partions the free blocks of each slab size into x more groups, where x is a configurable constant (in this particular implementation, x=16). This partioning is implemented by an array of size = x, and is indexed by taking the value of the log(2,x) bits that come after the most significant one. Each value points to the first element of a linked list of
+free blocks (or is NULL).
+
+To fulfill a tlsf_malloc(), the bitmaps showing the availibility of free blocks (of a given size
+class) are used to find a free block in the matching size class (or if there are none, in a larger
+size class) in constant time
+
+When tlsf_free() is called, the block checks for the possibility of coalescing with adjacent
+free blocks and then returns the block to the free list 
 
 ----------------------------------------------------------------
 |Main structure: Contains...									|
