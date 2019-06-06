@@ -31,32 +31,32 @@ free blocks and then returns the block to the free list
 
 -----------------------------------------------------------------------------
 |Main structure: Contains...                                                |
-|	Segregated List(array of pointers to second levels)                       |
-|	Bitmap showing which levels have free blocks                              |
+| Segregated List(array of pointers to second levels)                       |
+| Bitmap showing which levels have free blocks                              |
 |                                                                           |
-|   Blocks fit into different size ranges:					                        |
+|   Blocks fit into different size ranges:                                  |
 |                                                                           |
-|				|2^31|...|2^9|2^8|2^7|2^6|2^5|2^4                                   |
+|       |2^31|...|2^9|2^8|2^7|2^6|2^5|2^4                                   |
 -----------------------------------------------------------------------------
                             |       |
                             |       |       -------------------------
                             |       |       |Level Two              |
--------------------------   |       |_____>	|   Array of free lists	|
-|Level Two              |<__|				        |   Bitmap              |
-|   Array of free lists	|					          -------------------------
+-------------------------   |       |_____> |   Array of free lists |
+|Level Two              |<__|               |   Bitmap              |
+|   Array of free lists |                   -------------------------
 |   bitmaps             |
 |   |   |   ... |   |   |
 -------------------------
-	  |				|
-	  |				|
-------------	------------
-|Free_Block |	|Free_Block |
-|           |	|           |
-|           |	|           |
--------------	-------------
+    |       |
+    |       |
+------------  ------------
+|Free_Block | |Free_Block |
+|           | |           |
+|           | |           |
+------------- -------------
       |
       |
-      |	
+      | 
 ------------
 |Free_Block |
 |           |
