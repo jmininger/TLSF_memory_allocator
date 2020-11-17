@@ -1,5 +1,7 @@
 Two Level Segregated Fit(TLSF) Dynamic Memory Allocator For Real-Time Systems
 
+NOTE: THIS IS A TOY PROJECT. DO NOT USE FOR ANYTHING IMPORTANT
+
 Based on the whitepaper from Miguel Masmano, Ismael Ripoll & Alfons Crespo.
 (See paper here: http://www.gii.upv.es/tlsf/files/ecrts04_tlsf.pdf)
 Even more information can be found here: http://www.gii.upv.es/tlsf/
