@@ -6,10 +6,6 @@ Based on the whitepaper from Miguel Masmano, Ismael Ripoll & Alfons Crespo.
 (See paper here: http://www.gii.upv.es/tlsf/files/ecrts04_tlsf.pdf)
 Even more information can be found here: http://www.gii.upv.es/tlsf/
 
-Tests:
-See the README in tests/ to build and run the tests. This project uses a test driver from
-Carnegie Mellon University to test the allocator on various trace files.
-
 Use:
 void* tlsf_init(void* pool_start, size_t pool_size);
 void* tlsf_malloc(void* tlsf, size_t size);
